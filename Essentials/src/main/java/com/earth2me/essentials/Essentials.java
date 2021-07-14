@@ -21,6 +21,7 @@ import com.earth2me.essentials.commands.EssentialsCommand;
 import com.earth2me.essentials.commands.IEssentialsCommand;
 import com.earth2me.essentials.commands.NoChargeException;
 import com.earth2me.essentials.commands.NotEnoughArgumentsException;
+import com.earth2me.essentials.commands.PlayerNotFoundException;
 import com.earth2me.essentials.commands.QuietAbortException;
 import com.earth2me.essentials.economy.EconomyLayers;
 import com.earth2me.essentials.economy.vault.VaultEconomyProvider;
@@ -38,6 +39,7 @@ import com.earth2me.essentials.textreader.IText;
 import com.earth2me.essentials.textreader.KeywordReplacer;
 import com.earth2me.essentials.textreader.SimpleTextInput;
 import com.earth2me.essentials.updatecheck.UpdateChecker;
+import com.earth2me.essentials.utils.FormatUtil;
 import com.earth2me.essentials.utils.VersionUtil;
 import io.papermc.lib.PaperLib;
 import net.ess3.api.Economy;
@@ -58,6 +60,7 @@ import net.ess3.provider.KnownCommandsProvider;
 import net.ess3.provider.MaterialTagProvider;
 import net.ess3.provider.PersistentDataProvider;
 import net.ess3.provider.PotionMetaProvider;
+import net.ess3.provider.SerializationProvider;
 import net.ess3.provider.ProviderListener;
 import net.ess3.provider.ServerStateProvider;
 import net.ess3.provider.SpawnEggProvider;
@@ -76,8 +79,10 @@ import net.ess3.provider.providers.PaperContainerProvider;
 import net.ess3.provider.providers.PaperKnownCommandsProvider;
 import net.ess3.provider.providers.PaperMaterialTagProvider;
 import net.ess3.provider.providers.PaperRecipeBookListener;
+import net.ess3.provider.providers.PaperSerializationProvider;
 import net.ess3.provider.providers.PaperServerStateProvider;
 import net.essentialsx.api.v2.services.BalanceTop;
+import net.essentialsx.api.v2.services.mail.MailService;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
 import org.bukkit.World;
@@ -107,7 +112,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.java.JavaPluginLoader;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
-import org.yaml.snakeyaml.error.YAMLException;
 
 import java.io.File;
 import java.io.IOException;
@@ -117,6 +121,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -143,6 +148,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
     private transient UserMap userMap;
     private transient BalanceTopImpl balanceTop;
     private transient ExecuteTimer execTimer;
+    private transient MailService mail;
     private transient I18n i18n;
     private transient MetricsWrapper metrics;
     private transient EssentialsTimer timer;
@@ -152,6 +158,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
     private transient PotionMetaProvider potionMetaProvider;
     private transient ServerStateProvider serverStateProvider;
     private transient ContainerProvider containerProvider;
+    private transient SerializationProvider serializationProvider;
     private transient KnownCommandsProvider knownCommandsProvider;
     private transient FormattedCommandAliasProvider formattedCommandAliasProvider;
     private transient ProviderListener recipeBookEventProvider;
@@ -199,6 +206,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
         LOGGER.log(Level.INFO, tl("usingTempFolderForTesting"));
         LOGGER.log(Level.INFO, dataFolder.toString());
         settings = new Settings(this);
+        mail = new MailServiceImpl(this);
         userMap = new UserMap(this);
         balanceTop = new BalanceTopImpl(this);
         permissionsHandler = new PermissionsHandler(this, false);
@@ -263,151 +271,147 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
                 }
             }
 
-            try {
-                final EssentialsUpgrade upgrade = new EssentialsUpgrade(this);
-                upgrade.beforeSettings();
-                execTimer.mark("Upgrade");
+            final EssentialsUpgrade upgrade = new EssentialsUpgrade(this);
+            upgrade.beforeSettings();
+            execTimer.mark("Upgrade");
 
-                confList = new ArrayList<>();
-                settings = new Settings(this);
-                confList.add(settings);
-                execTimer.mark("Settings");
+            confList = new ArrayList<>();
+            settings = new Settings(this);
+            confList.add(settings);
+            execTimer.mark("Settings");
 
-                userMap = new UserMap(this);
-                confList.add(userMap);
-                execTimer.mark("Init(Usermap)");
+            mail = new MailServiceImpl(this);
+            execTimer.mark("Init(Mail)");
 
-                balanceTop = new BalanceTopImpl(this);
-                execTimer.mark("Init(BalanceTop)");
+            userMap = new UserMap(this);
+            confList.add(userMap);
+            execTimer.mark("Init(Usermap)");
 
-                kits = new Kits(this);
-                confList.add(kits);
-                upgrade.convertKits();
-                execTimer.mark("Kits");
+            balanceTop = new BalanceTopImpl(this);
+            execTimer.mark("Init(BalanceTop)");
 
-                upgrade.afterSettings();
-                execTimer.mark("Upgrade2");
+            kits = new Kits(this);
+            confList.add(kits);
+            upgrade.convertKits();
+            execTimer.mark("Kits");
 
-                warps = new Warps(getServer(), this.getDataFolder());
-                confList.add(warps);
-                execTimer.mark("Init(Warp)");
+            upgrade.afterSettings();
+            execTimer.mark("Upgrade2");
 
-                worth = new Worth(this.getDataFolder());
-                confList.add(worth);
-                execTimer.mark("Init(Worth)");
+            warps = new Warps(this.getDataFolder());
+            confList.add(warps);
+            execTimer.mark("Init(Warp)");
 
-                itemDb = getItemDbFromConfig();
-                confList.add(itemDb);
-                execTimer.mark("Init(ItemDB)");
+            worth = new Worth(this.getDataFolder());
+            confList.add(worth);
+            execTimer.mark("Init(Worth)");
 
-                randomTeleport = new RandomTeleport(this);
-                if (randomTeleport.getPreCache()) {
-                    randomTeleport.cacheRandomLocations(randomTeleport.getCenter(), randomTeleport.getMinRange(), randomTeleport.getMaxRange());
-                }
-                confList.add(randomTeleport);
-                execTimer.mark("Init(RandomTeleport)");
+            itemDb = getItemDbFromConfig();
+            confList.add(itemDb);
+            execTimer.mark("Init(ItemDB)");
 
-                customItemResolver = new CustomItemResolver(this);
-                try {
-                    itemDb.registerResolver(this, "custom_items", customItemResolver);
-                    confList.add(customItemResolver);
-                } catch (final Exception e) {
-                    e.printStackTrace();
-                    customItemResolver = null;
-                }
-                execTimer.mark("Init(CustomItemResolver)");
-
-                jails = new Jails(this);
-                confList.add(jails);
-                execTimer.mark("Init(Jails)");
-
-                //Spawner item provider only uses one but it's here for legacy...
-                spawnerItemProvider = new BlockMetaSpawnerItemProvider();
-
-                //Spawner block providers
-                if (VersionUtil.getServerBukkitVersion().isLowerThan(VersionUtil.v1_12_0_R01)) {
-                    spawnerBlockProvider = new ReflSpawnerBlockProvider();
-                } else {
-                    spawnerBlockProvider = new BukkitSpawnerBlockProvider();
-                }
-
-                //Spawn Egg Providers
-                if (VersionUtil.getServerBukkitVersion().isLowerThan(VersionUtil.v1_9_R01)) {
-                    spawnEggProvider = new LegacySpawnEggProvider();
-                } else if (VersionUtil.getServerBukkitVersion().isLowerThanOrEqualTo(VersionUtil.v1_12_2_R01)) {
-                    spawnEggProvider = new ReflSpawnEggProvider();
-                } else {
-                    spawnEggProvider = new FlatSpawnEggProvider();
-                }
-
-                //Potion Meta Provider
-                if (VersionUtil.getServerBukkitVersion().isLowerThan(VersionUtil.v1_9_R01)) {
-                    potionMetaProvider = new LegacyPotionMetaProvider();
-                } else {
-                    potionMetaProvider = new BasePotionDataProvider();
-                }
-
-                //Server State Provider
-                //Container Provider
-                if (PaperLib.isPaper() && VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_15_2_R01)) {
-                    serverStateProvider = new PaperServerStateProvider();
-                    containerProvider = new PaperContainerProvider();
-                } else {
-                    serverStateProvider = new ReflServerStateProvider();
-                }
-
-                //Event Providers
-                if (PaperLib.isPaper()) {
-                    try {
-                        Class.forName("com.destroystokyo.paper.event.player.PlayerRecipeBookClickEvent");
-                        recipeBookEventProvider = new PaperRecipeBookListener(event -> {
-                            if (this.getUser(((PlayerEvent) event).getPlayer()).isRecipeSee()) {
-                                ((Cancellable) event).setCancelled(true);
-                            }
-                        });
-                    } catch (final ClassNotFoundException ignored) {
-                    }
-                }
-
-                //Known Commands Provider
-                if (PaperLib.isPaper() && VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_11_2_R01)) {
-                    knownCommandsProvider = new PaperKnownCommandsProvider();
-                } else {
-                    knownCommandsProvider = new ReflKnownCommandsProvider();
-                }
-
-                // Command aliases provider
-                formattedCommandAliasProvider = new ReflFormattedCommandAliasProvider(PaperLib.isPaper());
-
-                // Material Tag Providers
-                if (VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_13_0_R01)) {
-                    materialTagProvider = PaperLib.isPaper() ? new PaperMaterialTagProvider() : new BukkitMaterialTagProvider();
-                }
-
-                // Sync Commands Provider
-                syncCommandsProvider = new ReflSyncCommandsProvider();
-
-                if (VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_14_4_R01)) {
-                    persistentDataProvider = new ModernPersistentDataProvider(this);
-                } else {
-                    persistentDataProvider = new ReflPersistentDataProvider(this);
-                }
-
-                execTimer.mark("Init(Providers)");
-                reload();
-
-                // The item spawn blacklist is loaded with all other settings, before the item
-                // DB, but it depends on the item DB, so we need to reload it again here:
-                ((Settings) settings)._lateLoadItemSpawnBlacklist();
-            } catch (final YAMLException exception) {
-                if (pm.getPlugin("EssentialsUpdate") != null) {
-                    LOGGER.log(Level.SEVERE, tl("essentialsHelp2"));
-                } else {
-                    LOGGER.log(Level.SEVERE, tl("essentialsHelp1"));
-                }
-                handleCrash(exception);
-                return;
+            randomTeleport = new RandomTeleport(this);
+            if (randomTeleport.getPreCache()) {
+                randomTeleport.cacheRandomLocations(randomTeleport.getCenter(), randomTeleport.getMinRange(), randomTeleport.getMaxRange());
             }
+            confList.add(randomTeleport);
+            execTimer.mark("Init(RandomTeleport)");
+
+            customItemResolver = new CustomItemResolver(this);
+            try {
+                itemDb.registerResolver(this, "custom_items", customItemResolver);
+                confList.add(customItemResolver);
+            } catch (final Exception e) {
+                e.printStackTrace();
+                customItemResolver = null;
+            }
+            execTimer.mark("Init(CustomItemResolver)");
+
+            jails = new Jails(this);
+            confList.add(jails);
+            execTimer.mark("Init(Jails)");
+
+            EconomyLayers.onEnable(this);
+
+            //Spawner item provider only uses one but it's here for legacy...
+            spawnerItemProvider = new BlockMetaSpawnerItemProvider();
+
+            //Spawner block providers
+            if (VersionUtil.getServerBukkitVersion().isLowerThan(VersionUtil.v1_12_0_R01)) {
+                spawnerBlockProvider = new ReflSpawnerBlockProvider();
+            } else {
+                spawnerBlockProvider = new BukkitSpawnerBlockProvider();
+            }
+
+            //Spawn Egg Providers
+            if (VersionUtil.getServerBukkitVersion().isLowerThan(VersionUtil.v1_9_R01)) {
+                spawnEggProvider = new LegacySpawnEggProvider();
+            } else if (VersionUtil.getServerBukkitVersion().isLowerThanOrEqualTo(VersionUtil.v1_12_2_R01)) {
+                spawnEggProvider = new ReflSpawnEggProvider();
+            } else {
+                spawnEggProvider = new FlatSpawnEggProvider();
+            }
+
+            //Potion Meta Provider
+            if (VersionUtil.getServerBukkitVersion().isLowerThan(VersionUtil.v1_9_R01)) {
+                potionMetaProvider = new LegacyPotionMetaProvider();
+            } else {
+                potionMetaProvider = new BasePotionDataProvider();
+            }
+
+            //Server State Provider
+            //Container Provider
+            if (PaperLib.isPaper() && VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_15_2_R01)) {
+                serverStateProvider = new PaperServerStateProvider();
+                containerProvider = new PaperContainerProvider();
+                serializationProvider = new PaperSerializationProvider();
+            } else {
+                serverStateProvider = new ReflServerStateProvider();
+            }
+
+            //Event Providers
+            if (PaperLib.isPaper()) {
+                try {
+                    Class.forName("com.destroystokyo.paper.event.player.PlayerRecipeBookClickEvent");
+                    recipeBookEventProvider = new PaperRecipeBookListener(event -> {
+                        if (this.getUser(((PlayerEvent) event).getPlayer()).isRecipeSee()) {
+                            ((Cancellable) event).setCancelled(true);
+                        }
+                    });
+                } catch (final ClassNotFoundException ignored) {
+                }
+            }
+
+            //Known Commands Provider
+            if (PaperLib.isPaper() && VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_11_2_R01)) {
+                knownCommandsProvider = new PaperKnownCommandsProvider();
+            } else {
+                knownCommandsProvider = new ReflKnownCommandsProvider();
+            }
+
+            // Command aliases provider
+            formattedCommandAliasProvider = new ReflFormattedCommandAliasProvider(PaperLib.isPaper());
+
+            // Material Tag Providers
+            if (VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_13_0_R01)) {
+                materialTagProvider = PaperLib.isPaper() ? new PaperMaterialTagProvider() : new BukkitMaterialTagProvider();
+            }
+
+            // Sync Commands Provider
+            syncCommandsProvider = new ReflSyncCommandsProvider();
+
+            if (VersionUtil.getServerBukkitVersion().isHigherThanOrEqualTo(VersionUtil.v1_14_4_R01)) {
+                persistentDataProvider = new ModernPersistentDataProvider(this);
+            } else {
+                persistentDataProvider = new ReflPersistentDataProvider(this);
+            }
+
+            execTimer.mark("Init(Providers)");
+            reload();
+
+            // The item spawn blacklist is loaded with all other settings, before the item
+            // DB, but it depends on the item DB, so we need to reload it again here:
+            ((Settings) settings)._lateLoadItemSpawnBlacklist();
             backup = new Backup(this);
             permissionsHandler = new PermissionsHandler(this, settings.useBukkitPermissions());
             alternativeCommandsHandler = new AlternativeCommandsHandler(this);
@@ -509,7 +513,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
                 user.sendMessage(tl("unvanishedReload"));
             }
             if (stopping) {
-                user.setLastLocation();
+                user.setLogoutLocation();
                 if (!user.isHidden()) {
                     user.setLastLogout(System.currentTimeMillis());
                 }
@@ -902,6 +906,94 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
         return user;
     }
 
+    @Override
+    public User matchUser(final Server server, final User sourceUser, final String searchTerm, final Boolean getHidden, final boolean getOffline) throws PlayerNotFoundException {
+        final User user;
+        Player exPlayer;
+
+        try {
+            exPlayer = server.getPlayer(UUID.fromString(searchTerm));
+        } catch (final IllegalArgumentException ex) {
+            if (getOffline) {
+                exPlayer = server.getPlayerExact(searchTerm);
+            } else {
+                exPlayer = server.getPlayer(searchTerm);
+            }
+        }
+
+        if (exPlayer != null) {
+            user = getUser(exPlayer);
+        } else {
+            user = getUser(searchTerm);
+        }
+
+        if (user != null) {
+            if (!getOffline && !user.getBase().isOnline()) {
+                throw new PlayerNotFoundException();
+            }
+
+            if (getHidden || canInteractWith(sourceUser, user)) {
+                return user;
+            } else { // not looking for hidden and cannot interact (i.e is hidden)
+                if (getOffline && user.getName().equalsIgnoreCase(searchTerm)) { // if looking for offline and got an exact match
+                    return user;
+                }
+            }
+            throw new PlayerNotFoundException();
+        }
+        final List<Player> matches = server.matchPlayer(searchTerm);
+
+        if (matches.isEmpty()) {
+            final String matchText = searchTerm.toLowerCase(Locale.ENGLISH);
+            for (final User userMatch : getOnlineUsers()) {
+                if (getHidden || canInteractWith(sourceUser, userMatch)) {
+                    final String displayName = FormatUtil.stripFormat(userMatch.getDisplayName()).toLowerCase(Locale.ENGLISH);
+                    if (displayName.contains(matchText)) {
+                        return userMatch;
+                    }
+                }
+            }
+        } else {
+            for (final Player player : matches) {
+                final User userMatch = getUser(player);
+                if (userMatch.getDisplayName().startsWith(searchTerm) && (getHidden || canInteractWith(sourceUser, userMatch))) {
+                    return userMatch;
+                }
+            }
+            final User userMatch = getUser(matches.get(0));
+            if (getHidden || canInteractWith(sourceUser, userMatch)) {
+                return userMatch;
+            }
+        }
+        throw new PlayerNotFoundException();
+    }
+
+    @Override
+    public boolean canInteractWith(final CommandSource interactor, final User interactee) {
+        if (interactor == null) {
+            return !interactee.isHidden();
+        }
+
+        if (interactor.isPlayer()) {
+            return canInteractWith(getUser(interactor.getPlayer()), interactee);
+        }
+
+        return true; // console
+    }
+
+    @Override
+    public boolean canInteractWith(final User interactor, final User interactee) {
+        if (interactor == null) {
+            return !interactee.isHidden();
+        }
+
+        if (interactor.equals(interactee)) {
+            return true;
+        }
+
+        return interactor.getBase().canSee(interactee.getBase());
+    }
+
     //This will create a new user if there is not a match.
     @Override
     public User getUser(final Player base) {
@@ -1076,6 +1168,11 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
     }
 
     @Override
+    public MailService getMail() {
+        return mail;
+    }
+
+    @Override
     public List<String> getVanishedPlayers() {
         return Collections.unmodifiableList(new ArrayList<>(vanishedPlayers));
     }
@@ -1144,6 +1241,11 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
     }
 
     @Override
+    public SerializationProvider getSerializationProvider() {
+        return serializationProvider;
+    }
+
+    @Override
     public FormattedCommandAliasProvider getFormattedCommandAliasProvider() {
         return formattedCommandAliasProvider;
     }
@@ -1192,7 +1294,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
         public void onWorldLoad(final WorldLoadEvent event) {
             PermissionsDefaults.registerBackDefaultFor(event.getWorld());
 
-            ess.getJails().onReload();
+            ess.getJails().reloadConfig();
             ess.getWarps().reloadConfig();
             for (final IConf iConf : ((Essentials) ess).confList) {
                 if (iConf instanceof IEssentialsModule) {
@@ -1203,7 +1305,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
 
         @EventHandler(priority = EventPriority.LOW)
         public void onWorldUnload(final WorldUnloadEvent event) {
-            ess.getJails().onReload();
+            ess.getJails().reloadConfig();
             ess.getWarps().reloadConfig();
             for (final IConf iConf : ((Essentials) ess).confList) {
                 if (iConf instanceof IEssentialsModule) {
